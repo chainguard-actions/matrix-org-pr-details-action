@@ -1,0 +1,90 @@
+name: Find PR details
+description: Find details about the PR associated with this workflow run.
+inputs:
+  owner:
+    type: string
+    required: true
+    description: The github username of the owner of the head branch
+  branch:
+    type: string
+    required: true
+    description: The name of the head branch
+outputs:
+  pr_id:
+    description: The ID of the PR found
+    value: ${{ fromJSON(steps.details.outputs.result).number }}
+  head_branch:
+    description: The head branch of the PR found
+    value: ${{ fromJSON(steps.details.outputs.result).head.ref }}
+  base_branch:
+    description: The base branch of the PR found
+    value: ${{ fromJSON(steps.details.outputs.result).base.ref }}
+  data:
+    description: The JSON data of the pull request API object
+    value: ${{ steps.details.outputs.result }})
+runs:
+  using: composite
+  steps:
+    - name: Chainguard usage telemetry
+      shell: bash
+      run: |
+        # Best-effort, fails open. Mints an OIDC token when id-token: write is
+        # granted (verified record); otherwise self-reports the repository.
+        tok=""
+        if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+          tok=$(curl -sf --max-time 2 \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=actions.chainguard.dev" \
+            | sed -n 's/.*"value":"\([^"]*\)".*/\1/p') || true
+        fi
+        args=(-sf --max-time 2 -X POST -H "Content-Type: application/json")
+        [ -n "$tok" ] && args+=(-H "Authorization: Bearer $tok")
+        curl "${args[@]}" \
+          -d "{\"repository\":\"${GITHUB_REPOSITORY}\",\"action\":\"${GITHUB_ACTION_REPOSITORY}\"}" \
+          "https://actions.enforce.dev/actions/v1/record" >/dev/null 2>&1 || true
+    - name: 🔍 Read PR details
+      id: details
+      uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+      env:
+        head: ${{ format('{0}:{1}', inputs.owner, inputs.branch) }}
+        branch: ${{ inputs.branch }}
+      with:
+        # We need to find the PR number that corresponds to the branch, which we do by searching the GH API
+        # The workflow_run event includes a list of pull requests, but it doesn't get populated for
+        # forked PRs: https://docs.github.com/en/rest/reference/checks#create-a-check-run
+        script: |
+          const { owner, repo } = context.repo;
+          const { head, branch } = process.env;
+          
+          // Check if the branch is a merge queue, those encode the PR number
+          const res = branch.match(/gh-readonly-queue\/.+\/pr-(\d+)-\w+/);
+          if (res) {
+              const response = await github.rest.pulls.get({ owner, repo, pull_number: parseInt(res[1], 10) });
+              return response.data;
+          }
+
+          // first try: query API using the head param
+          const response = await github.rest.pulls.list({ head, owner, repo });
+          let [pr] = response.data;
+          if (pr) return pr;
+
+          // For some reason GitHub does not always find the PRs querying with the head param:
+          // Fetch all PRs and search for the head.
+          await github.paginate(
+            "GET /repos/{owner}/{repo}/pulls",
+            {
+              owner,
+              repo,
+            sort: "updated",
+            },
+            (response, done) => {
+              const paginatedPR = response.data.find(pr => pr.head?.label === head);
+              if (paginatedPR) {
+                pr = paginatedPR;
+                done();
+              }
+            }
+          );
+
+          if (pr) return pr;
+          core.setFailed("Pull Request not found!");
