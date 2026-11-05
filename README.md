@@ -1,14 +1,16 @@
-# matrix-org/pr-details-action
+# pr-details-action
+A Github Action for finding details about a PR relating to the workflow run
 
-Find details about the PR associated with this workflow run.
+## Example for running from a `workflow_run` reacting to a `pull_request` workflow.
 
-Hardened by [Chainguard](https://www.chainguard.dev) from the upstream action at [https://github.com/matrix-org/pr-details-action](https://github.com/matrix-org/pr-details-action).
-
-## Versions
-
-| Version | Tag | Upstream commit | Hardening report |
-|---------|-----|-----------------|------------------|
-| v1.3 | [`v1.3`](https://github.com/chainguard-actions/matrix-org-pr-details-action/tree/v1.3) | [`15bde52`](https://github.com/matrix-org/pr-details-action/commit/15bde5285d7850ba276cc3bd8a03733e3f24622a) | [`HARDENING.md`](https://github.com/chainguard-actions/matrix-org-pr-details-action/blob/v1.3/HARDENING.md) |
+```yaml
+steps:
+  - id: details
+    uses: matrix-org/pr-details-action@v1
+    with:
+      owner: ${{ github.event.workflow_run.head_repository.owner.login }}
+      branch: ${{ github.event.workflow_run.head_branch }}
+```
 
 ## Privacy
 
